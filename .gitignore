@@ -1,0 +1,10 @@
+# Project
+.idea
+.ipynb_checkpoints
+venv
+
+# Data
+*.pkl
+
+# Python 
+*.pyc
