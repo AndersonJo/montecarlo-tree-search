@@ -35,7 +35,7 @@ class Node(object):
 
     @property
     def n_children(self):
-        return len(self.children)
+        return len(list(filter(lambda c: c[1] != -1, self.children)))
 
     def __str__(self):
         return '(Node {0}->{1} actions:{2} win:{3} visit:{4})'.format(
@@ -56,35 +56,49 @@ class MCTS(object):
         self.nodes: Dict[Dict[Node]] = defaultdict(dict)
         self.root_state = None
         self.cur_state = None
+        self.cur_action = None
 
     def init_root_state(self, state):
         self.cur_state = state
+        self.cur_action = -1
         if state not in self.nodes:
+            self.nodes[state][-1] = Node(state=state, action=-1)
+        elif -1 not in self.nodes[state]:
             self.nodes[state][-1] = Node(state=state, action=-1)
         self.root_state = state
 
-    def search_action(self, state, action):
-        cur_node = self.nodes[self.cur_state][action]
+    def get_current_node(self):
+        return self.nodes[self.cur_state][self.cur_action]
 
-        if not cur_node.children:
-            next_node = self.expand(self.cur_state, state, action)
+    def search_action(self, state):
+        """
+        Additionally it updates the current node by updating cur_state and cur_action
+        :param state: Current state
+        :return:
+        """
+        cur_node = self.get_current_node()
+        if cur_node.n_children == 0:
+            next_node = self.expand(state)
 
-        elif np.random.rand() >= 0.2 and self.n_actions != cur_node.n_children:  # more exploration is required
-            next_node = self.expand(self.cur_state, state, action)
+        elif np.random.rand() >= 0.2 and self.n_actions > cur_node.n_children:  # more exploration is required
+            next_node = self.expand(state)
         else:
-            print('calculate_ucb', self.nodes[self.cur_state])
-            print('mnnnnnnnsssss', self.nodes[state])
-            next_node, uct = self.calculate_ucb(self.cur_state, action=action, scalar=0.7)
+            next_node, uct = self.calculate_ucb(scalar=0.7)
 
-        self.cur_state = state
+        # Update current state and action
+        self.cur_state = next_node.state
+        self.cur_action = next_node.action
+        # assert self.cur_state in self.nodes
+        # assert self.cur_action in self.nodes[self.cur_state]
+
         return next_node, next_node.action
 
     def best_action(self):
         next_node, uct = self.cur_node.calculate_uct(scalar=0.1)[0]
         return next_node.action
 
-    def expand(self, cur_state, state, action):
-        cur_node = self.nodes[cur_state][action]
+    def expand(self, state):
+        cur_node = self.get_current_node()
         assert self.n_actions > cur_node.n_children
 
         tried_actions = set([c[1] for c in cur_node.children])
@@ -93,13 +107,15 @@ class MCTS(object):
         if state in self.nodes and rand_action in self.nodes[state]:
             next_node = self.nodes[state][rand_action]
         else:
-            next_node = Node(state=state, action=rand_action, parent=(cur_state, action))
+            next_node = Node(state=state, action=rand_action, parent=(self.cur_state, self.cur_action))
             self.nodes[state][rand_action] = next_node
 
         cur_node.add_child(state=state, action=rand_action)
+        # assert state in self.nodes
+        # assert rand_action in self.nodes[state]
         return next_node
 
-    def calculate_ucb(self, cur_state, action, scalar):
+    def calculate_ucb(self, scalar):
         """
         Upper Confidence Bound
         The algorithm selects a node that maximize some quality.
@@ -107,29 +123,27 @@ class MCTS(object):
         @param cur_state: current state
         @param scalar: scalar is a weight for exploration over exploitation
         """
-        actions = self.nodes[cur_state]
-        cur_node = self.nodes[cur_state][action]
+        cur_node = self.get_current_node()
 
-        keys = filter(lambda k: k != -1, actions.keys())
-        children = [self.nodes[cur_state][a] for a in keys]
+        keys = list(self.nodes[self.cur_state].keys())
+        if -1 in keys:
+            keys.remove(-1)
+        children = [self.nodes[self.cur_state][a] for a in keys]
 
         ucts = map(lambda c: (c, (c.n_win / c.n_visit) + scalar * np.sqrt(2 * np.log(cur_node.n_visit) / c.n_visit)),
                    children)
-        ucts = filter(lambda c: c[0].action != -1, ucts)
 
-        try:
-            sorted_ucts = sorted(ucts, key=lambda c: -c[1])[0]
-        except:
-            import ipdb
-            ipdb.set_trace()
-        return sorted_ucts
+        top_node = sorted(ucts, key=lambda c: -c[1])[0]
+        return top_node
 
-    def backpropagation(self, state, action, reward):
-        node = self.nodes[state][action]
-
+    def backpropagation(self, reward):
+        node = self.get_current_node()
+        count = 0
         while node.parent is not None:
             node.update(reward)
             node = self.nodes[node.parent[0]][node.parent[1]]
+            count += 1
+        return count
 
     def display(self, state=None, action=None, step=0):
         if state is None:
@@ -170,35 +184,30 @@ def train(epochs=700000):
         init_state = state = taxi.reset()
         mcts.init_root_state(init_state)
         action = -1
-        print('START', mcts.nodes)
-
+        backpropagation_count = 0
         while True:
-
-            next_node, action = mcts.search_action(state=state, action=action)
-            print('wwwwwwwwww', next_node, action)
-            # if action == -1:
-            #     import ipdb
-            #     ipdb.set_trace()
-            state, reward, done, info = taxi.step(next_node.action)
+            next_node, action = mcts.search_action(state=state)
+            state, reward, done, info = taxi.step(action)
 
             if reward == -10:
-                mcts.backpropagation(state=state, action=action, reward=-1)
+                backpropagation_count = mcts.backpropagation(reward=-1)
                 fail_pickup_count += 1
                 break
 
             if reward > 0:
                 success_count += 1
-                mcts.backpropagation(state=state, action=action, reward=reward)
+                backpropagation_count = mcts.backpropagation(reward=reward)
                 break
 
             if done:
                 break
 
-        if epoch % 50000 == 0:
-            mcts.display(state, action)
+        if epoch % 10000 == 0:
+            # mcts.display(state, action)
             save(mcts)
 
-            print(' - O:{0}, X:{1} nodes:{2}'.format(success_count, fail_pickup_count, len(mcts.nodes)))
+            print(' - O:{0}, X:{1}, backpropagation:{2}, nodes:{3}'.format(
+                success_count, fail_pickup_count, backpropagation_count, len(mcts.nodes)))
 
     # demo(taxi, mcts)
 

@@ -131,6 +131,7 @@ def train(epochs=700000):
 
         while True:
             action = mcts.search_action(state)
+
             state, reward, done, info = taxi.step(action)
 
             if reward == -10:
