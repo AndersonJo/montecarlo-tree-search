@@ -1,23 +1,23 @@
 import pickle
-from typing import List, Tuple, Union, Dict
+from typing import List, Tuple, Union
 
 import gym
 import numpy as np
 import random
 
 from tqdm import tqdm
-from collections import defaultdict
 
 ACTIONS = {'left': 3, 'right': 2, 'up': 1, 'down': 0, 'pickup0': 4, 'dropoff': 5}
 
 
 class Node(object):
-    def __init__(self, state=None, action: Union[None, int] = -1, parent=None):
-        self.state = state
+    def __init__(self, action: Union[None, int], state=None, parent: 'Node' = None, depth=1):
         self.action = action
+        self.state = state
         self.parent = parent
         self.n_win = 0
         self.n_visit = 1
+        self.depth = depth
         self.children = list()
 
     def has_child(self) -> bool:
@@ -25,9 +25,13 @@ class Node(object):
             return True
         return False
 
-    def add_child(self, state, action) -> None:
-        if (state, action) not in self.children:
-            self.children.append((state, action))
+    def add_child(self, child_node) -> None:
+        self.children.append(child_node)
+
+    def calculate_uct(self, scalar) -> List[Tuple['Node', float]]:
+        ucts = map(lambda c: (c, (c.n_win / c.n_visit) + scalar * np.sqrt(2 * np.log(self.n_visit) / c.n_visit)),
+                   self.children)
+        return sorted(ucts, key=lambda c: -c[1])
 
     def update(self, reward):
         self.n_visit += 1
@@ -35,125 +39,72 @@ class Node(object):
 
     @property
     def n_children(self):
-        return len(list(filter(lambda c: c[1] != -1, self.children)))
+        return len(self.children)
 
     def __str__(self):
-        return '(Node {0}->{1} actions:{2} win:{3} visit:{4})'.format(
-            self.parent, self.state, self.children, self.n_win, self.n_visit)
+        return '(Node.{0}-{1} w:{2} v:{3})'.format(self.state, self.action, self.n_win, self.n_visit)
 
     def __repr__(self):
-        return '(Node {0}->{1} actions:{2} win:{3} visit:{4})'.format(
-            self.parent, self.state, self.children, self.n_win, self.n_visit)
+        return '(Node.{0}-{1} w:{2} v:{3})'.format(self.state, self.action, self.n_win, self.n_visit)
 
 
 class MCTS(object):
 
-    def __init__(self, actions):
+    def __init__(self, actions, max_depth=40):
         self.actions = actions
         self.n_actions = len(actions)
+        self.root = Node(action=None)
+        self.cur_node = self.root
+        self.max_depth = max_depth
 
-        # Create Nodes
-        self.nodes: Dict[Dict[Node]] = defaultdict(dict)
-        self.root_state = None
-        self.cur_state = None
-        self.cur_action = None
-
-    def init_root_state(self, state):
-        self.cur_state = state
-        self.cur_action = -1
-        if state not in self.nodes:
-            self.nodes[state][-1] = Node(state=state, action=-1)
-        elif -1 not in self.nodes[state]:
-            self.nodes[state][-1] = Node(state=state, action=-1)
-        self.root_state = state
-
-    def get_current_node(self):
-        return self.nodes[self.cur_state][self.cur_action]
-
-    def search_action(self, state):
+    def search_action(self, state, exploration_rate=0.5):
         """
-        Additionally it updates the current node by updating cur_state and cur_action
-        :param state: Current state
-        :return:
+        Upper Confidence Bound
         """
-        cur_node = self.get_current_node()
-        if cur_node.n_children == 0:
-            next_node = self.expand(state)
+        if self.cur_node.depth >= self.max_depth:
+            return None
 
-        elif np.random.rand() >= 0.2 and self.n_actions > cur_node.n_children:  # more exploration is required
-            next_node = self.expand(state)
+        if not self.cur_node.has_child():
+            next_node = self.expand(self.cur_node, state)
+
+        elif np.random.rand() <= exploration_rate and self.n_actions != self.cur_node.n_children:
+            next_node = self.expand(self.cur_node, state)
         else:
-            next_node, uct = self.calculate_ucb(scalar=0.7)
+            next_node, uct = self.cur_node.calculate_uct(scalar=0.70)[0]
 
-        # Update current state and action
-        self.cur_state = next_node.state
-        self.cur_action = next_node.action
-        # assert self.cur_state in self.nodes
-        # assert self.cur_action in self.nodes[self.cur_state]
-
-        return next_node, next_node.action
+        self.cur_node = next_node
+        return self.cur_node.action
 
     def best_action(self):
         next_node, uct = self.cur_node.calculate_uct(scalar=0.1)[0]
         return next_node.action
 
-    def expand(self, state):
-        cur_node = self.get_current_node()
-        assert self.n_actions > cur_node.n_children
+    def expand(self, node, state) -> Node:
+        assert self.n_actions > len(node.children)
 
-        tried_actions = set([c[1] for c in cur_node.children])
+        tried_actions = {c.action for c in node.children}
         rand_action = random.choice(list(set(self.actions) - tried_actions))
-
-        if state in self.nodes and rand_action in self.nodes[state]:
-            next_node = self.nodes[state][rand_action]
-        else:
-            next_node = Node(state=state, action=rand_action, parent=(self.cur_state, self.cur_action))
-            self.nodes[state][rand_action] = next_node
-
-        cur_node.add_child(state=state, action=rand_action)
-        # assert state in self.nodes
-        # assert rand_action in self.nodes[state]
-        return next_node
-
-    def calculate_ucb(self, scalar):
-        """
-        Upper Confidence Bound
-        The algorithm selects a node that maximize some quality.
-
-        @param cur_state: current state
-        @param scalar: scalar is a weight for exploration over exploitation
-        """
-        cur_node = self.get_current_node()
-
-        keys = list(self.nodes[self.cur_state].keys())
-        if -1 in keys:
-            keys.remove(-1)
-        children = [self.nodes[self.cur_state][a] for a in keys]
-
-        ucts = map(lambda c: (c, (c.n_win / c.n_visit) + scalar * np.sqrt(2 * np.log(cur_node.n_visit) / c.n_visit)),
-                   children)
-
-        top_node = sorted(ucts, key=lambda c: -c[1])[0]
-        return top_node
+        depth = self.cur_node.depth + 1
+        new_node = Node(action=rand_action, state=state, parent=node, depth=depth)
+        node.add_child(new_node)
+        return new_node
 
     def backpropagation(self, reward):
-        node = self.get_current_node()
-        count = 0
+        node = self.cur_node
         while node.parent is not None:
             node.update(reward)
-            node = self.nodes[node.parent[0]][node.parent[1]]
-            count += 1
-        return count
+            node = node.parent
 
-    def display(self, state=None, action=None, step=0):
-        if state is None:
-            state = self.root_state
-            action = -1
+    def reset(self):
+        self.cur_node = self.root
 
-        node: Node = self.nodes[state][action]
+    def display(self, node=None, step=0):
+        if node is None:
+            node = self.root
+
         print('{0} {1}'.format(' ' * step, node))
-        for action in node.children:
-            self.display(node.state, action, step + 1)
+        for c in node.children:
+            self.display(c, step + 1)
 
 
 def save(mcts, filename='checkpoint.pkl'):
@@ -161,64 +112,68 @@ def save(mcts, filename='checkpoint.pkl'):
         pickle.dump(mcts, f)
 
 
-def load(filename='checkpoint.pkl') -> MCTS:
+def load(filename='checkpoint.pkl'):
     print('Loading {0}'.format(filename))
     with open(filename, 'rb') as f:
-        mcts = pickle.load(f)
-        mcts.cur_node = mcts.root
+        mcts_set = pickle.load(f)
+
     print('Loading Done')
-    return mcts
+    return mcts_set
 
 
-def train(epochs=700000):
+def train(epochs=2000000, checkpoint=None, seed=2):
+    if checkpoint is not None:
+        mcts = load(checkpoint)
+    else:
+        mcts = MCTS(actions=list(ACTIONS.values()))
     taxi = gym.make('Taxi-v2')
-    init_state = taxi.reset()
-
-    mcts = MCTS(actions=list(ACTIONS.values()))
-    mcts.init_root_state(init_state)
 
     success_count = 0
     fail_pickup_count = 0
+    for epoch in tqdm(range(1, epochs + 1), ncols=70):
+        taxi.seed(seed)
+        state = taxi.reset()
+        mcts.reset()
 
-    for epoch in tqdm(range(epochs), ncols=70):
-        init_state = state = taxi.reset()
-        mcts.init_root_state(init_state)
-        action = -1
-        backpropagation_count = 0
         while True:
-            next_node, action = mcts.search_action(state=state)
+            action = mcts.search_action(state, exploration_rate=0.8)
+            if action is None:
+                mcts.backpropagation(-1)
+                break
+
             state, reward, done, info = taxi.step(action)
 
             if reward == -10:
-                backpropagation_count = mcts.backpropagation(reward=-1)
+                mcts.backpropagation(-1)
                 fail_pickup_count += 1
                 break
 
             if reward > 0:
                 success_count += 1
-                backpropagation_count = mcts.backpropagation(reward=reward)
+                mcts.backpropagation(100)
                 break
 
             if done:
                 break
 
-        if epoch % 10000 == 0:
-            # mcts.display(state, action)
+        if epoch % 50000 == 0:
+            # mcts.display()
             save(mcts)
 
-            print(' - O:{0}, X:{1}, backpropagation:{2}, nodes:{3}'.format(
-                success_count, fail_pickup_count, backpropagation_count, len(mcts.nodes)))
+            print(' - success:{0}, wrong_pickup:{1}'.format(success_count, fail_pickup_count))
+            success_count = 0
+            fail_pickup_count = 0
 
-    # demo(taxi, mcts)
+    demo(taxi, mcts, seed=seed)
 
 
-def demo(taxi, mcts_set):
+def demo(taxi, mcts, seed=2):
+    taxi.seed(seed)
     state = taxi.reset()
-    mcts = mcts_set[state]
     mcts.reset()
 
     while True:
-        action = mcts.best_action()
+        action = mcts.search_action(state, exploration_rate=0.2)
         state, reward, done, info = taxi.step(action)
         print(taxi.render(), 'action:', action, 'reward:', reward)
 
@@ -229,26 +184,9 @@ def demo(taxi, mcts_set):
 def test():
     mcts = load()
     taxi = gym.make('Taxi-v2')
-
-    state = taxi.reset()
-    mcts.reset()
-    reward = 0
-
-    while True:
-        action = mcts.best_action()
-        state, reward, done, info = taxi.step(action)
-        print(taxi.render(), 'action:', action, 'reward:', reward)
-        input()
-        if done:
-            break
-
-    if reward > 10:
-        mcts.display()
-
-        print('score: {0}'.format(reward))
+    demo(taxi, mcts)
 
 
 if __name__ == '__main__':
-    train()
-
+    train(epochs=20000000, checkpoint='checkpoint.pkl')
     # test()
