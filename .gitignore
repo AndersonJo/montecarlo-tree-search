@@ -5,6 +5,10 @@ venv
 
 # Data
 *.pkl
+*.mp4
 
 # Python 
 *.pyc
+
+# ETC
+*.swp

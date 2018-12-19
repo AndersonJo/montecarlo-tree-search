@@ -50,24 +50,25 @@ class Node(object):
 
 class MCTS(object):
 
-    def __init__(self, actions, max_depth=40):
+    def __init__(self, actions, max_depth=20):
         self.actions = actions
         self.n_actions = len(actions)
         self.root = Node(action=None)
         self.cur_node = self.root
         self.max_depth = max_depth
 
-    def search_action(self, state, exploration_rate=0.5):
+    def search_action(self, state):
         """
         Upper Confidence Bound
         """
         if self.cur_node.depth >= self.max_depth:
+            self.cur_node.n_win += -1
             return None
 
         if not self.cur_node.has_child():
             next_node = self.expand(self.cur_node, state)
 
-        elif np.random.rand() <= exploration_rate and self.n_actions != self.cur_node.n_children:
+        elif np.random.rand() > 0.5 and self.n_actions != self.cur_node.n_children:
             next_node = self.expand(self.cur_node, state)
         else:
             next_node, uct = self.cur_node.calculate_uct(scalar=0.70)[0]
@@ -93,6 +94,18 @@ class MCTS(object):
         node = self.cur_node
         while node.parent is not None:
             node.update(reward)
+            node = node.parent
+
+    def vanishing_backpropagation(self, reward):
+        node = self.cur_node
+        negative = False
+        if reward < 0:
+            negative = True
+        while node.parent is not None:
+            node.update(reward)
+            reward = np.log1p(np.log1p(abs(reward)))
+            if negative:
+                reward *= -1
             node = node.parent
 
     def reset(self):
@@ -121,7 +134,7 @@ def load(filename='checkpoint.pkl'):
     return mcts_set
 
 
-def train(epochs=2000000, checkpoint=None, seed=2):
+def train(epochs=1000000, checkpoint=None, seed=2):
     if checkpoint is not None:
         mcts = load(checkpoint)
     else:
@@ -129,26 +142,28 @@ def train(epochs=2000000, checkpoint=None, seed=2):
     taxi = gym.make('Taxi-v2')
 
     success_count = 0
-    fail_pickup_count = 0
+    wrong_pickup_count = 0
+    end_count = 0
     for epoch in tqdm(range(1, epochs + 1), ncols=70):
         taxi.seed(seed)
         state = taxi.reset()
         mcts.reset()
 
         while True:
-            action = mcts.search_action(state, exploration_rate=0.8)
-            if action is None:
-                mcts.backpropagation(-1)
+            action = mcts.search_action(state)
+            if action is None:  # It reached the end of the tree.
+                mcts.vanishing_backpropagation(-1)
+                end_count += 1
                 break
 
             state, reward, done, info = taxi.step(action)
 
-            if reward == -10:
+            if reward == -10:  # the taxi picked up the wrong person
                 mcts.backpropagation(-1)
-                fail_pickup_count += 1
+                wrong_pickup_count += 1
                 break
 
-            if reward > 0:
+            if reward > 0:  # The game has been solved!
                 success_count += 1
                 mcts.backpropagation(100)
                 break
@@ -160,11 +175,13 @@ def train(epochs=2000000, checkpoint=None, seed=2):
             # mcts.display()
             save(mcts)
 
-            print(' - success:{0}, wrong_pickup:{1}'.format(success_count, fail_pickup_count))
-            success_count = 0
-            fail_pickup_count = 0
+            print(' - success:{0}, wrong_pickup:{1}, end_tree:{2}'.format(
+                success_count, wrong_pickup_count, end_count))
 
-    demo(taxi, mcts, seed=seed)
+            success_count = 0
+            wrong_pickup_count = 0
+
+    # demo(taxi, mcts, seed=seed)
 
 
 def demo(taxi, mcts, seed=2):
@@ -173,7 +190,9 @@ def demo(taxi, mcts, seed=2):
     mcts.reset()
 
     while True:
-        action = mcts.search_action(state, exploration_rate=0.2)
+        action = mcts.search_action(state)
+        if action is None:
+            break
         state, reward, done, info = taxi.step(action)
         print(taxi.render(), 'action:', action, 'reward:', reward)
 
@@ -188,5 +207,5 @@ def test():
 
 
 if __name__ == '__main__':
-    train(epochs=20000000, checkpoint='checkpoint.pkl')
+    train(epochs=10000000)
     # test()
