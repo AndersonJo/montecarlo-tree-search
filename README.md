@@ -26,8 +26,6 @@ Montecarlo tree search의 예제를 보여줍니다.
 
 # Result
 
-* **[https://youtu.be/CsxUwp94wko](https://youtu.be/CsxUwp94wko)**
-
 ![Demo](images/demo.gif)
 
 택시 (노란색)는 승객 (파란색 R)을 탑승시킨뒤에 목적지 (핑크색 B)에 내리면 점수를 얻습니다. 
