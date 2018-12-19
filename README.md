@@ -30,7 +30,7 @@ Montecarlo tree search의 예제를 보여줍니다.
 
 택시 (노란색)는 승객 (파란색 R)을 탑승시킨뒤에 목적지 (핑크색 B)에 내리면 점수를 얻습니다. 
 
-The objective of this game is that the taxi (yellow box) pick up the right person to the destination where the taxi should drop off the passenger. 
+The objective of this game is that the taxi (yellow box) picks up the right person to the destination where the taxi should drop off the passenger. 
 
 # Requirements
 
@@ -48,6 +48,8 @@ python mcts.py
 ```
 
 the following screen is an actual training logs. 
+
+It takes quite a lot of time because of the complexity of the game. 
 
 ```
   0%|                      | 49718/10000000 [00:10<38:17, 4330.84it/s]
