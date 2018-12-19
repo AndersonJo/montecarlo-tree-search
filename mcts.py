@@ -57,7 +57,7 @@ class MCTS(object):
         self.cur_node = self.root
         self.max_depth = max_depth
 
-    def search_action(self, state):
+    def search_action(self, state, exploration_rate=0.5):
         """
         Upper Confidence Bound
         """
@@ -68,7 +68,7 @@ class MCTS(object):
         if not self.cur_node.has_child():
             next_node = self.expand(self.cur_node, state)
 
-        elif np.random.rand() > 0.5 and self.n_actions != self.cur_node.n_children:
+        elif np.random.rand() <= exploration_rate and self.n_actions != self.cur_node.n_children:
             next_node = self.expand(self.cur_node, state)
         else:
             next_node, uct = self.cur_node.calculate_uct(scalar=0.70)[0]
@@ -150,7 +150,7 @@ def train(epochs=1000000, checkpoint=None, seed=2):
         mcts.reset()
 
         while True:
-            action = mcts.search_action(state)
+            action = mcts.search_action(state, exploration_rate=0.8)
             if action is None:  # It reached the end of the tree.
                 mcts.vanishing_backpropagation(-1)
                 end_count += 1
@@ -178,6 +178,11 @@ def train(epochs=1000000, checkpoint=None, seed=2):
             print(' - success:{0}, wrong_pickup:{1}, end_tree:{2}'.format(
                 success_count, wrong_pickup_count, end_count))
 
+            if wrong_pickup_count == 0 and success_count == 50000:
+                print('Early Stop!')
+                print('Training Successfully Done')
+                break
+
             success_count = 0
             wrong_pickup_count = 0
 
@@ -190,7 +195,7 @@ def demo(taxi, mcts, seed=2):
     mcts.reset()
 
     while True:
-        action = mcts.search_action(state)
+        action = mcts.search_action(state, exploration_rate=0.0)
         if action is None:
             break
         state, reward, done, info = taxi.step(action)
