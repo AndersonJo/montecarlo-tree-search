@@ -179,3 +179,7 @@ Second is using your Jupyter Notebook.
 
 ![Test](images/test.png)
 
+아래는 test.py 를 실행시켰을때의 예제 입니다.
+
+![Demo](images/demo2.png)
+

@@ -5,9 +5,18 @@ import gym
 import numpy as np
 import random
 
+import argparse
+
 from tqdm import tqdm
 
-ACTIONS = {'left': 3, 'right': 2, 'up': 1, 'down': 0, 'pickup0': 4, 'dropoff': 5}
+ACTIONS = {'left': 3, 'right': 2, 'up': 1, 'down': 0, 'pickup': 4, 'dropoff': 5}
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='MonteCarlo Tree Search Demo')
+    parser.add_argument('--checkpoint', default='checkpoint.pkl', type=str)
+    args = parser.parse_args()
+    return args
 
 
 class Node(object):
@@ -33,8 +42,8 @@ class Node(object):
                    self.children)
         return sorted(ucts, key=lambda c: -c[1])
 
-    def update(self, reward):
-        self.n_visit += 1
+    def update(self, reward=0, visit=0):
+        self.n_visit += visit
         self.n_win += reward
 
     @property
@@ -90,10 +99,10 @@ class MCTS(object):
         node.add_child(new_node)
         return new_node
 
-    def backpropagation(self, reward):
+    def backpropagation(self, reward=0, visit=0):
         node = self.cur_node
         while node.parent is not None:
-            node.update(reward)
+            node.update(reward, visit)
             node = node.parent
 
     def vanishing_backpropagation(self, reward):
@@ -120,27 +129,31 @@ class MCTS(object):
             self.display(c, step + 1)
 
 
-def save(mcts, filename='checkpoint.pkl'):
+def save(mcts, seed=None, filename='checkpoint.pkl'):
+    assert seed is not None
     with open(filename, 'wb') as f:
-        pickle.dump(mcts, f)
+        pickle.dump({'mcts': mcts, 'seed': seed}, f)
 
 
 def load(filename='checkpoint.pkl'):
     print('Loading {0}'.format(filename))
     with open(filename, 'rb') as f:
-        mcts_set = pickle.load(f)
-
+        loaded_data = pickle.load(f)
+    print(loaded_data)
+    mcts, seed = loaded_data['mcts'], loaded_data['seed']
     print('Loading Done')
-    return mcts_set
+    return mcts, seed
 
 
-def train(epochs=1000000, checkpoint=None, seed=2):
+def train(epochs, simulation, seed, checkpoint=None):
     if checkpoint is not None:
         mcts = load(checkpoint)
     else:
         mcts = MCTS(actions=list(ACTIONS.values()))
     taxi = gym.make('Taxi-v2')
 
+    is_first_pickup = True
+    pickup_count = 0
     success_count = 0
     wrong_pickup_count = 0
     end_count = 0
@@ -149,23 +162,41 @@ def train(epochs=1000000, checkpoint=None, seed=2):
         state = taxi.reset()
         mcts.reset()
 
+        _do_simulation = True
+        if epoch > simulation:
+            _do_simulation = False
+
         while True:
-            action = mcts.search_action(state, exploration_rate=0.8)
+
+            if _do_simulation:
+                action = mcts.search_action(state, exploration_rate=1)
+            else:
+                action = mcts.search_action(state, exploration_rate=0.2)
+
             if action is None:  # It reached the end of the tree.
-                mcts.vanishing_backpropagation(-1)
+                mcts.backpropagation(visit=1)
                 end_count += 1
                 break
 
-            state, reward, done, info = taxi.step(action)
+            next_state, reward, done, info = taxi.step(action)
+
+            if action == ACTIONS['pickup'] and reward == -1:
+                pickup_count += 1
+
+                if is_first_pickup:
+                    mcts.backpropagation(reward=10)
+                    print('PICKED UP!')
+                    print(taxi.render())
+                    is_first_pickup = False
 
             if reward == -10:  # the taxi picked up the wrong person
-                mcts.backpropagation(-1)
+                mcts.backpropagation(visit=1)
                 wrong_pickup_count += 1
                 break
 
             if reward > 0:  # The game has been solved!
                 success_count += 1
-                mcts.backpropagation(100)
+                mcts.backpropagation(reward=2, visit=1)
                 break
 
             if done:
@@ -173,18 +204,22 @@ def train(epochs=1000000, checkpoint=None, seed=2):
 
         if epoch % 50000 == 0:
             # mcts.display()
-            save(mcts)
+            save(mcts, seed, filename='checkpoint.pkl')
 
-            print(' - success:{0}, wrong_pickup:{1}, end_tree:{2}'.format(
-                success_count, wrong_pickup_count, end_count))
+            print(' - pickup:{0} success:{1}, wrong_pickup:{2}, end_tree:{3}'.format(
+                pickup_count, success_count, wrong_pickup_count, end_count))
 
             if wrong_pickup_count == 0 and success_count == 50000:
                 print('Early Stop!')
                 print('Training Successfully Done')
                 break
 
+            pickup_count = 0
             success_count = 0
             wrong_pickup_count = 0
+            end_count = 0
+
+            # demo(taxi, mcts, seed=seed)
 
     # demo(taxi, mcts, seed=seed)
 
@@ -206,11 +241,15 @@ def demo(taxi, mcts, seed=2):
 
 
 def test():
-    mcts = load()
+    args = parse_args()
+    mcts, seed = load(args.checkpoint)
     taxi = gym.make('Taxi-v2')
-    demo(taxi, mcts)
+    demo(taxi, mcts, seed=seed)
 
 
 if __name__ == '__main__':
-    train(epochs=10000000)
-    # test()
+    seed = np.random.randint(0, 50000)
+    np.random.seed(seed)
+    seed = 38260
+    print('SEED:', seed)
+    train(epochs=30000000, simulation=15000000, seed=seed)
