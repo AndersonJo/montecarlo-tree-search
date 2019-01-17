@@ -1,6 +1,6 @@
 import gym
 
-from mcts import load, MCTS, Node
+from mcts2 import load, MCTS, Node
 
 mcts, seed = load()
 taxi = gym.make('Taxi-v2')
