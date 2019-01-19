@@ -140,7 +140,7 @@ class MCTS(ABC):
         rand_action = random.choice(list(set(actions) - tried_actions))
         depth = self.cur_node.depth + 1
         new_node = Node(action=rand_action, state=state, parent=node, depth=depth)
-        node.link_next_state(new_node)
+        node.add_child(new_node)
 
         if next:
             self.cur_node = new_node

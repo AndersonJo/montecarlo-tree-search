@@ -1,3 +1,4 @@
+from copy import deepcopy
 from itertools import product
 from random import random
 from typing import List, Tuple, Union
@@ -119,18 +120,57 @@ class OthelloBase(BaseEnv, EzPickle):
         available_place = bool(np.sum((self.board == self.EMPTY) | (self.board == self.HINT)))
         if not available_place:
             return True
+
         legal_actions = self.get_legal_actions()
+
         if legal_actions is None:
             return True
         return False
 
-    def calculate_score(self):
+    def calculate_score(self, player=None):
+        if player is None:
+            player = self.player
+
         # Determine the score by counting the tiles.
         white_score = np.sum(self.board == self.WHITE)
         black_score = np.sum(self.board == self.BLACK)
-        my_score, opponent_score = (white_score, black_score) if self.player == self.WHITE else (
+        my_score, opponent_score = (white_score, black_score) if player == self.WHITE else (
             black_score, white_score)
         return white_score, black_score, int(my_score > opponent_score)
+
+    def calculate_reward(self, player, reward, done):
+        if done:
+            white_score, black_score = reward
+
+            if player == self.WHITE and white_score > black_score:
+                return 1
+            elif player == self.BLACK and black_score > white_score:
+                return 1
+        return 0
+
+    def calculate_reward_in_tie(self, player=None):
+        if player is None:
+            player = self.player
+
+        white_score, black_score, _ = self.calculate_score(player)
+        if player == self.WHITE and white_score > black_score:
+            return 1
+        elif player == self.BLACK and white_score < black_score:
+            return 1
+        return 0
+
+    def calculate_maximum_depth_penalty(self, player):
+        return 0
+
+    def change_turn(self):
+        self.player = self.WHITE if self.player == self.BLACK else self.BLACK
+
+    def copy(self):
+        game = deepcopy(self)
+        game.board = self.board.copy()
+        game.player = self.player
+        game._temp_legal_actions = None
+        return game
 
     def get_legal_actions(self):
         if self._temp_legal_actions is not None:
@@ -146,18 +186,6 @@ class OthelloBase(BaseEnv, EzPickle):
 
         self._temp_legal_actions = valid_positions
         return valid_positions
-
-        # if not valid_positions:
-        #     # No place to put the piece.
-        #     # End of the Game
-        #     self.change_turn()
-        #     valid_positions = self._get_legal_actions()
-        #     if not valid_positions and self.is_end():
-        #         return None
-        #     else:
-        #         raise Exception('I do not know')
-        #
-        # return valid_positions
 
     def _get_legal_actions(self) -> List[Tuple[int, int]]:
         valid_positions = []
@@ -175,27 +203,30 @@ class OthelloBase(BaseEnv, EzPickle):
         :return: game status, reward, done, info
         """
         x, y = action
-
         flip_positions = self.is_valid_position(x, y, self.player)
+
         if flip_positions is None:
             white_score, black_score, overcome = self.calculate_score()
             player = self.PLAYERS[self.player]
-            state = self.to_hashed_state(self.player, self.board)
+            state = self.to_hashed_state(self.next_player(), self.board)
 
         else:
             self.board[y, x] = self.player
+
             for x, y in flip_positions:
                 self.board[y, x] = self.player
             white_score, black_score, overcome = self.calculate_score()
             player = self.PLAYERS[self.player]
-            state = self.to_hashed_state(self.player, self.board)
+            state = self.to_hashed_state(self.next_player(), self.board)
 
         self.change_turn()
+        is_end = self.is_end()
+        # self.change_turn()
         self._temp_legal_actions = None
-        return state, (white_score, black_score), self.is_end(), {'player': player, 'flip': False}
+        return state, (white_score, black_score), is_end, {'player': player, 'flip': False}
 
-    def change_turn(self):
-        self.player = self.WHITE if self.player == self.BLACK else self.BLACK
+    def next_player(self):
+        return self.BLACK if self.player == self.WHITE else self.WHITE
 
     def hint(self):
         self.remove_hint()
@@ -209,7 +240,7 @@ class OthelloBase(BaseEnv, EzPickle):
         self.board[self.board == self.HINT] = self.EMPTY
 
     def to_hashed_state(self, player: int, state: np.ndarray) -> str:
-        return str(player) + ''.join(map(str, state.reshape(-1)))
+        return str(player) + str(state) # ''.join(map(str, state.reshape(-1)))
 
 
 class Othello(OthelloBase):
@@ -336,7 +367,7 @@ class Othello(OthelloBase):
         self.render()
 
         while True:
-
+            # self.change_turn()
             valid_positions = self.get_legal_actions()
             if valid_positions is None:
                 break
@@ -363,10 +394,8 @@ class Othello(OthelloBase):
             state, reward, done, info = self.step((space_xy[0], space_xy[1]))
 
             # Render the game board
+            # self.change_turn()
             self.render()
-            self.render_info()
-
-            print(reward, done, info)
 
             if done:
                 while True:

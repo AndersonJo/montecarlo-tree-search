@@ -1,11 +1,11 @@
 from copy import deepcopy
 from math import sqrt
 from random import random, choice
-from typing import Union, List, Tuple
+from typing import Union, List, Tuple, Dict
 
 import numpy as np
 from tqdm import tqdm
-
+from pprint import pprint
 from mcts.env import BaseEnv
 
 
@@ -19,11 +19,12 @@ class Node:
     def has_child(self) -> bool:
         return bool(self.children)
 
-    def link_next_state(self, state):
+    def add_child(self, state):
         self.children.setdefault(state, 0)
+        self.children[state] += 1
 
     def __repr__(self):
-        return '<Node.{0} w:{1} v:{2}>'.format(self.action, self.value, self.n_visit)
+        return '<Node.{0} w:{1} v:{2} c:{3}>'.format(self.action, self.value, self.n_visit, len(self.children))
 
 
 class MCTS(object):
@@ -42,7 +43,7 @@ class MCTS(object):
     @property
     def cur_node(self):
         if self.history:
-            return self.nodes[self.history[-1]]
+            return self.nodes[self.history[-1][1]]
 
         return None
 
@@ -50,7 +51,7 @@ class MCTS(object):
     def cur_depth(self):
         return len(self.history)
 
-    def get_action(self, node: Node, legal_actions) -> Union[None, Node]:
+    def get_action(self, node: Node, legal_actions, nodes: Dict[str, int] = None) -> Union[None, Node]:
         """
         :return: next node's action
         """
@@ -58,57 +59,93 @@ class MCTS(object):
             return None
 
         if not node.has_child():  # reached the leaf node
-            action = self.rand_action(node, legal_actions)
+            action = self.rand_action(node, legal_actions, nodes=nodes)
         elif random() <= self.exploration_rate and len(legal_actions) >= 1:
-            action = self.rand_action(node, legal_actions)
+            action = self.rand_action(node, legal_actions, nodes=nodes)
         else:
-            next_node, uct = self.calculate_uct(node)
+            next_node, uct = self.calculate_uct(node, nodes=nodes)
             action = next_node.action
 
         return action
 
-    def rand_action(self, node, legal_actions) -> Node:
+    def rand_action(self, node, legal_actions, nodes: Dict[str, int] = None) -> Node:
         assert len(legal_actions) >= 1
+        if nodes is None:
+            nodes = self.nodes
 
-        tried_actions = {self.nodes[s] for s in node.children}
+        tried_actions = {nodes[s] for s in node.children}
         action = choice(list(set(legal_actions) - tried_actions))
-
-        # new_node = Node(action=rand_action)
-        # node.link_next_state(state)
-
         return action
 
-    def calculate_uct(self, node) -> Tuple[Node, float]:
+    def calculate_uct(self, node, nodes: Dict[str, int] = None) -> Tuple[Node, float]:
+        if nodes is None:
+            nodes = self.nodes
 
-        nodes = [self.nodes[key] for key in node.children]
+        nodes = [nodes[key] for key in node.children]
         ucts = map(lambda c: (c, (c.value / c.n_visit) + self.C * np.sqrt(np.log(node.n_visit) / c.n_visit)),
                    nodes)
         return sorted(ucts, key=lambda c: -c[1])[0]
 
-    def expand(self, cur_node: Union[Node, None], state, action):
-        new_node = self.nodes.get(state, None)
+    def expand(self, cur_node: Union[Node, None], state, action, history: list = None, nodes: Dict[str, int] = None,
+               player=None):
+
+        if nodes is None:
+            nodes = self.nodes
+
+        new_node = nodes.get(state, None)
 
         if new_node is None:
             new_node = Node(action=action)
-            self.nodes[state] = new_node
+            nodes[state] = new_node
 
         if cur_node is not None:
-            cur_node.link_next_state(state)
+            cur_node.add_child(state)
 
-        self.history.append(state)
+        if history is not None and player is not None:
+            history.append((player, state))
         return
 
     def simulate(self, env, state):
-        env = deepcopy(env)
-        nodes = deepcopy(self.nodes)
 
+        value = 0
         for i in range(self.simulation):
-            self._simulate(env, state, nodes)
+            env_copied = env.copy()
+            nodes = deepcopy(self.nodes)
+
+            value += self._simulate(env_copied, state, nodes)
+        return value
 
     def _simulate(self, env, state, nodes):
-        env.render()
-        import ipdb
-        ipdb.set_trace()
+        player = env.player
+        node = nodes[state]
+
+        while True:
+
+            legal_actions = env.get_legal_actions()
+            if legal_actions is None:
+                return env.calculate_reward_in_tie(player)
+            assert len(legal_actions) > 0
+
+            action = self.get_action(node, legal_actions, nodes=nodes)
+            assert action in legal_actions
+
+            if action is None:  # reached maximum depth of the tree
+                return env.calculate_maximum_depth_penalty()
+
+            state, reward, done, info = env.step(action)
+
+            if done:
+                return env.calculate_reward(player, reward, done)
+
+            self.expand(node, state, action, nodes=nodes)
+            node = nodes[state]
+
+    def backpropagation(self, history, player, value):
+        for history_player, state in history[::-1]:
+            if history_player != player:
+                node: Node = self.nodes[state]
+                node.n_visit += self.simulation
+                node.value += value
 
     def train(self, epochs: int = 10000, seed=None):
         for epoch in tqdm(range(1, epochs + 1), ncols=70):
@@ -117,37 +154,36 @@ class MCTS(object):
             if seed is not None:
                 self.env.seed(seed)
             state = self.env.reset()
-            self.expand(None, state, 'root')
+            self.expand(None, state, 'root', history=self.history, player=self.env.player)
 
             while True:
                 # Get Legal Actions
                 legal_actions = self.env.get_legal_actions()
                 if legal_actions is None:
-                    # no place to a piece for all players
-                    # TODO: Backpropagation
-                    self.env.render()
-                    break
+                    return self.env.calculate_reward_in_tie()
+
+                assert len(legal_actions) > 0
 
                 # Select & Expand
                 action = self.get_action(self.cur_node, legal_actions)
                 if action is None:  # it reached the end of the tree
                     break
+                assert action in legal_actions
 
                 # Action!
                 state, reward, done, info = self.env.step(action)
-                # self.update_state(state, action)
 
                 # Expand
-                self.expand(self.cur_node, state, action)
+                self.expand(self.cur_node, state, action, history=self.history, player=self.env.player)
 
                 # Simulation
-                self.simulate(self.env, state)
+                value = self.simulate(self.env, state)
+
+                # Backpropagation
+                self.backpropagation(self.history, self.env.next_player(), value)
 
                 if done:
                     break
-
-        import ipdb
-        ipdb.set_trace()
 
     def reset(self):
         self.history.clear()

@@ -1,2 +1,6 @@
 tqdm==4.28.1
 numpy==1.15.4
+gym==0.10.9
+numpy==1.15.4
+pygame==1.9.4
+ipdb==0.11
