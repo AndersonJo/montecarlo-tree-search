@@ -1,6 +1,7 @@
+from abc import ABC
 from copy import deepcopy
 from itertools import product
-from random import random
+from random import random, choice
 from typing import List, Tuple, Union
 
 import numpy as np
@@ -11,7 +12,7 @@ from gym.utils import EzPickle
 from mcts.env import BaseEnv
 
 
-class OthelloBase(BaseEnv, EzPickle):
+class OthelloBase(BaseEnv, EzPickle, ABC):
     EMPTY = 0
     HINT = 1
     WHITE = 2
@@ -36,11 +37,13 @@ class OthelloBase(BaseEnv, EzPickle):
         self.player: int = self.WHITE if random() >= 0.5 else self.BLACK
 
         self._temp_legal_actions = None
+        self._temp_scores = None
 
         self.reset()
         EzPickle.__init__(self)
 
     def reset(self) -> str:
+        self.player = choice([self.WHITE, self.BLACK])
         if self.board is None:
             self.board = np.zeros((self.board_height, self.board_width), dtype=np.int8)
         else:
@@ -121,7 +124,7 @@ class OthelloBase(BaseEnv, EzPickle):
         if not available_place:
             return True
 
-        legal_actions = self.get_legal_actions()
+        legal_actions, turn_changed = self.get_legal_actions()
 
         if legal_actions is None:
             return True
@@ -138,17 +141,7 @@ class OthelloBase(BaseEnv, EzPickle):
             black_score, white_score)
         return white_score, black_score, int(my_score > opponent_score)
 
-    def calculate_reward(self, player, reward, done):
-        if done:
-            white_score, black_score = reward
-
-            if player == self.WHITE and white_score > black_score:
-                return 1
-            elif player == self.BLACK and black_score > white_score:
-                return 1
-        return 0
-
-    def calculate_reward_in_tie(self, player=None):
+    def calculate_reward(self, player=None) -> int:
         if player is None:
             player = self.player
 
@@ -172,20 +165,23 @@ class OthelloBase(BaseEnv, EzPickle):
         game._temp_legal_actions = None
         return game
 
-    def get_legal_actions(self):
+    def get_legal_actions(self) -> Tuple[Union[List[Tuple[int, int]], None], bool]:
         if self._temp_legal_actions is not None:
-            return self._temp_legal_actions
+            return self._temp_legal_actions, False
 
-        valid_positions = self._get_legal_actions()
-        if not valid_positions:
+        legal_actions = self._get_legal_actions()
+        turn_changed = False
+        if not legal_actions:
             self.change_turn()
-            valid_positions = self._get_legal_actions()
-            if not valid_positions:
-                self._temp_legal_actions = None
-                return None
+            turn_changed = True
 
-        self._temp_legal_actions = valid_positions
-        return valid_positions
+            legal_actions = self._get_legal_actions()
+            if not legal_actions:
+                self._temp_legal_actions = None
+                return None, turn_changed
+
+        self._temp_legal_actions = legal_actions
+        return legal_actions, turn_changed
 
     def _get_legal_actions(self) -> List[Tuple[int, int]]:
         valid_positions = []
@@ -219,11 +215,17 @@ class OthelloBase(BaseEnv, EzPickle):
             player = self.PLAYERS[self.player]
             state = self.to_hashed_state(self.next_player(), self.board)
 
+        if player == self.WHITE and white_score > black_score:
+            reward = 1
+        elif player == self.BLACK and white_score < black_score:
+            reward = 1
+        else:
+            reward = 0
+
         self.change_turn()
         is_end = self.is_end()
-        # self.change_turn()
         self._temp_legal_actions = None
-        return state, (white_score, black_score), is_end, {'player': player, 'flip': False}
+        return state, reward, is_end, {'white': white_score, 'black': black_score, 'player': player}
 
     def next_player(self):
         return self.BLACK if self.player == self.WHITE else self.WHITE
@@ -231,7 +233,8 @@ class OthelloBase(BaseEnv, EzPickle):
     def hint(self):
         self.remove_hint()
 
-        valid_positions = self.get_legal_actions()
+        valid_positions, turn_changed = self.get_legal_actions()
+
         if valid_positions is not None:
             for x, y in valid_positions:
                 self.board[y, x] = self.HINT
@@ -240,7 +243,7 @@ class OthelloBase(BaseEnv, EzPickle):
         self.board[self.board == self.HINT] = self.EMPTY
 
     def to_hashed_state(self, player: int, state: np.ndarray) -> str:
-        return str(player) + str(state) # ''.join(map(str, state.reshape(-1)))
+        return str(player) + str(state)  # ''.join(map(str, state.reshape(-1)))
 
 
 class Othello(OthelloBase):
@@ -255,7 +258,7 @@ class Othello(OthelloBase):
     TEXT_COLOR = (0, 0, 0)
     FPS = 10
 
-    def __init__(self, board_width=8, board_height=8, show_hint=True):
+    def __init__(self, board_width=8, board_height=8, show_hint=False):
         super(Othello, self).__init__(board_width, board_height)
 
         self.show_hint = show_hint
@@ -368,28 +371,15 @@ class Othello(OthelloBase):
 
         while True:
             # self.change_turn()
-            valid_positions = self.get_legal_actions()
+            valid_positions, turn_changed = self.get_legal_actions()
             if valid_positions is None:
                 break
 
-            space_xy = None
             if random_play:
                 rand_idx = np.random.randint(0, len(valid_positions))
                 space_xy = valid_positions[rand_idx]
             else:
-                while space_xy is None:
-                    for event in pygame.event.get():  # event handling loop
-                        if _is_quit_game(event):  # Quit the game?
-                            return
-
-                        if event.type == pygame.MOUSEBUTTONUP:
-                            mouse_x, mouse_y = event.pos
-                            # Convert pixel coordinate to board coordinate
-                            space_xy = self._get_clicked_space(mouse_x, mouse_y)
-
-                            if space_xy is not None and not self.is_valid_position(space_xy[0], space_xy[1],
-                                                                                   self.player):
-                                space_xy = None
+                space_xy = self.play_as_human()
 
             state, reward, done, info = self.step((space_xy[0], space_xy[1]))
 
@@ -410,10 +400,36 @@ class Othello(OthelloBase):
 
         white_score, black_score, overcome = self.calculate_score()
 
+    def _is_game_over(self, event):
+        if event.type == pygame.QUIT:
+            pygame.quit()
+            return True
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                pygame.quit()
+                return True
+        return False
+
+    def play_as_human(self) -> Tuple[int, int]:
+        space_xy = None
+        while space_xy is None:
+            for event in pygame.event.get():  # event handling loop
+                if self._is_game_over(event):  # Quit the game?
+                    return None
+
+                if event.type == pygame.MOUSEBUTTONUP:
+                    mouse_x, mouse_y = event.pos
+                    # Convert pixel coordinate to board coordinate
+                    space_xy = self._get_clicked_space(mouse_x, mouse_y)
+
+                    if space_xy is not None and not self.is_valid_position(space_xy[0], space_xy[1], self.player):
+                        space_xy = None
+        return space_xy
+
 
 def dev():
-    reversi = Othello()
-    reversi.play(random_play=True)
+    reversi = Othello(show_hint=True)
+    reversi.play()
 
 
 if __name__ == '__main__':

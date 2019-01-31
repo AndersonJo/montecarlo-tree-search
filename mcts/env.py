@@ -9,17 +9,12 @@ class BaseEnv(Env, ABC):
     def __init__(self):
         self.player = None
 
-    def calculate_reward(self, player, reward, done: bool) -> int:
+    def calculate_reward(self, player) -> int:
         """
         Some games require player-based reward like Othello or Chess.
         :param player:
-        :param reward:
-        :return: score
         """
         raise NotImplementedError('calculate_reward not implemented')
-
-    def calculate_reward_in_tie(self, player):
-        raise NotImplementedError('calculate_reward_in_tie not implemented')
 
     def calculate_maximum_depth_penalty(self, player) -> int:
         raise NotImplementedError('calculate_maximum_depth_penalty not implemented')
@@ -43,3 +38,6 @@ class BaseEnv(Env, ABC):
 
     def to_hashed_state(self, player, state) -> str:
         raise NotImplementedError('to_hashed_state not implemented')
+
+    def play_as_human(self):
+        raise NotImplementedError('play_as_human not implemented')

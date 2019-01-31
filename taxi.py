@@ -1,29 +1,26 @@
-import argparse
-import logging
 import pickle
-import random
-from abc import ABC
-from copy import deepcopy
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
 import gym
 import numpy as np
+import random
+
+import argparse
+
 from tqdm import tqdm
 
-from games.othello import Othello
-
-logger = logging.getLogger('mcts')
+ACTIONS = {'left': 3, 'right': 2, 'up': 1, 'down': 0, 'pickup': 4, 'dropoff': 5}
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description='MonteCarlo Tree Search Demo')
-    parser.add_argument('--checkpoint', default='checkpoint.pkl', type=str)
+    parser.add_argument('--checkpoint', default='checkpoint_taxi.pkl', type=str)
     args = parser.parse_args()
     return args
 
 
 class Node(object):
-    def __init__(self, action, state=None, parent: 'Node' = None, depth=1):
+    def __init__(self, action: Union[None, int], state=None, parent: 'Node' = None, depth=1):
         self.action = action
         self.state = state
         self.parent = parent
@@ -31,7 +28,6 @@ class Node(object):
         self.n_visit = 1
         self.depth = depth
         self.children = list()
-        self.info = dict()
 
     def has_child(self) -> bool:
         if self.children:
@@ -58,137 +54,54 @@ class Node(object):
         return '(Node.{0}-{1} w:{2} v:{3})'.format(self.state, self.action, self.n_win, self.n_visit)
 
     def __repr__(self):
-        state = self.state
-        if type(self.state) == np.ndarray:
-            state = self.state.reshape(-1)
         return '(Node.{0}-{1} w:{2} v:{3})'.format(self.state, self.action, self.n_win, self.n_visit)
 
 
-class MCTS(ABC):
+class MCTS(object):
 
-    def __init__(self, env: Othello, actions=None, max_depth=20):
-        self.env = env
-        self._actions = actions
-        self._temp_actions = None
-        self._n_action = -1
+    def __init__(self, actions, max_depth=20):
+        self.actions = actions
+        self.n_actions = len(actions)
         self.root = Node(action=None)
         self.cur_node = self.root
         self.max_depth = max_depth
-        self.on_init()
 
-    def get_actions(self, env=None, default_actions=None):
-        if env is None:
-            env = self.env
-
-        if default_actions is not None:
-            actions = self._temp_actions
-        elif hasattr(env, 'get_legal_actions'):
-            actions = env.get_legal_actions()
-        else:
-            actions = self._actions
-
-        self._temp_actions = actions
-        self._n_action = len(actions)
-        assert actions is not None
-        return actions
-
-    def select(self, exploration_rate=0.5):
+    def search_action(self, state, exploration_rate=0.5):
+        """
+        Upper Confidence Bound
+        """
         if self.cur_node.depth >= self.max_depth:
             self.cur_node.n_win += -1
             return None
 
-        cur_node = self.cur_node
-        while True:
-            if not cur_node.has_child():  # reached the leaf node
-                break
-            elif np.random.rand() <= exploration_rate and len(self.get_actions()) != cur_node.n_children:
-                break
+        if not self.cur_node.has_child():
+            next_node = self.expand(self.cur_node, state)
 
-        return cur_node
+        elif np.random.rand() <= exploration_rate and self.n_actions != self.cur_node.n_children:
+            next_node = self.expand(self.cur_node, state)
+        else:
+            next_node, uct = self.cur_node.calculate_uct(scalar=0.70)[0]
 
-    # def search_action2(self, state, exploration_rate=0.5):
-    #     """
-    #     Upper Confidence Bound
-    #     """
-    #     if self.cur_node.depth >= self.max_depth:
-    #         self.cur_node.n_win += -1
-    #         return None
-    #
-    #     if not self.cur_node.has_child():
-    #         next_node = self.expand(self.cur_node, state)
-    #     elif np.random.rand() <= exploration_rate and self.get_actions() != self.cur_node.n_children:
-    #         next_node = self.expand(self.cur_node, state)
-    #     else:
-    #         next_node, uct = self.cur_node.calculate_uct(scalar=0.70)[0]
-    #
-    #     self.cur_node = next_node
-    #     self._n_action = -1
-    #     return self.cur_node.action
-    #
-    # def best_action(self):
-    #     next_node, uct = self.cur_node.calculate_uct(scalar=0.1)[0]
-    #     return next_node.action
+        self.cur_node = next_node
+        return self.cur_node.action
 
-    def expand(self, node, state, env=None, next=True) -> Node:
-        if env is None:
-            env = self.env
+    def best_action(self):
+        next_node, uct = self.cur_node.calculate_uct(scalar=0.1)[0]
+        return next_node.action
 
-        actions = self.get_actions(env)
-        assert len(actions) > len(node.children)
+    def expand(self, node, state) -> Node:
+        assert self.n_actions > len(node.children)
 
         tried_actions = {c.action for c in node.children}
-        rand_action = random.choice(list(set(actions) - tried_actions))
+        rand_action = random.choice(list(set(self.actions) - tried_actions))
         depth = self.cur_node.depth + 1
         new_node = Node(action=rand_action, state=state, parent=node, depth=depth)
         node.add_child(new_node)
-
-        if next:
-            self.cur_node = new_node
-
-        self.on_expand(env, new_node, state)
         return new_node
-
-    def simulate(self, start_node, state, n_simulation: int = 1, exploration_rate=0.8) -> int:
-        total_reward = 0
-        copied_node = deepcopy(start_node)
-
-        for i in range(n_simulation):
-            env = deepcopy(self.env)
-            cur_node = copied_node
-
-            while True:
-                actions = self.get_actions(env)
-                if len(actions) == 0:
-                    # no place to put a piece for the current player
-                    env.change_turn()
-                    continue
-                elif not cur_node.has_child():
-                    next_node = self.expand(cur_node, state, env=env, next=False)
-                elif np.random.rand() <= exploration_rate and len(actions) != cur_node.n_children:
-                    next_node = self.expand(cur_node, state, env=env, next=False)
-                else:
-                    next_node, uct = cur_node.calculate_uct(scalar=0.70)[0]
-
-                state, reward, done, info = env.step(next_node.action)
-                self.after_simulation_step(self.env, env, start_node, cur_node, state, reward, done, info)
-
-                if done:
-                    final_reward = self.finish_simulation_step(i, self.env, env, start_node, cur_node, state,
-                                                               reward, done, info, total_reward)
-                    total_reward += final_reward
-                    # logger.debug(f'{i} simulation done | reward:{final_reward} | total: {total_reward} '
-                    #              f'| done:{done} | info:{info}')
-                    break
-
-                cur_node = next_node
-
-        return total_reward
 
     def backpropagation(self, reward=0, visit=0):
         node = self.cur_node
-
         while node.parent is not None:
-            reward = self.on_reward(self.env, node, reward, visit)
             node.update(reward, visit)
             node = node.parent
 
@@ -206,8 +119,6 @@ class MCTS(ABC):
 
     def reset(self):
         self.cur_node = self.root
-        self._n_action = -1
-        self._temp_actions = None
 
     def display(self, node=None, step=0):
         if node is None:
@@ -216,26 +127,6 @@ class MCTS(ABC):
         print('{0} {1}'.format(' ' * step, node))
         for c in node.children:
             self.display(c, step + 1)
-
-    def get_environment_name(self):
-        raise NotImplementedError('get_environment_name not implemented error')
-
-    def on_init(self):
-        raise NotImplementedError('on_init not implemented')
-
-    def on_expand(self, env, new_node: Node, state):
-        raise NotImplementedError('on_expand not implemented')
-
-    def after_simulation_step(self, start_env, simulation_env, start_node: Node, cur_node: Node,
-                              state, reward, done, info):
-        raise NotImplementedError('after_simulation_step not implemented')
-
-    def finish_simulation_step(self, simulation_step: int, start_env, simulation_env, start_node: Node,
-                               cur_node: Node, state, reward, done, info, total_reward: int) -> int:
-        raise NotImplementedError('finish_simulation_step not implemented. it must return final score')
-
-    def on_reward(self, env, node, reward, visit):
-        raise NotImplementedError('on_reward not implemented.')
 
 
 def save(mcts, seed=None, filename='checkpoint.pkl'):
