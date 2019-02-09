@@ -179,9 +179,9 @@ class TicTacToe(TicTacToeBase):
         self.screen.blit(text, (10, 300))
 
     def render(self, mode='human'):
-        self._render_status()
 
         self.screen.fill((250, 250, 250))
+        self._render_status()
 
         pygame.draw.line(self.screen, (0, 0, 0), (100, 0), (100, 300), 2)
         pygame.draw.line(self.screen, (0, 0, 0), (200, 0), (200, 300), 2)

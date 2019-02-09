@@ -7,6 +7,7 @@ from multiprocessing.pool import ThreadPool
 from pprint import pprint
 from random import random, choice
 from threading import Lock
+from time import sleep
 from typing import Union, Dict, Tuple
 
 import numpy as np
@@ -392,6 +393,7 @@ class MCTS(object):
                 print()
                 print(f'Done | player:{env.player} | {info} | {reward}')
                 break
+        sleep(3)
 
 
 def save(mcts: MCTS, file='checkpoint.pkl'):
