@@ -4,15 +4,14 @@ from argparse import Namespace
 
 import gym
 import numpy as np
-from tqdm import tqdm
 
 from games import register_games
-from games.othello import Othello
 from mcts.env import BaseEnv
 from mcts.mcts import MCTS, load
 
 GAMES = {'taxi': 'Taxi-v2',
-         'othello': 'othello-v0'}
+         'othello': 'Othello-v0',
+         'tictactoe': 'TicTacToe-v0'}
 
 logger = logging.getLogger('mcts')
 logger.setLevel(logging.DEBUG)
@@ -25,7 +24,7 @@ logger.addHandler(ch)
 def parse_args() -> Namespace:
     parser = argparse.ArgumentParser(description='MonteCarlo Tree Search Demo')
     parser.add_argument('mode', type=str, choices=['train', 'play'])
-    parser.add_argument('game', type=str, choices=['othello', 'taxi'])
+    parser.add_argument('game', type=str, choices=['tictactoe', 'taxi', 'othello'])
     parser.add_argument('--versus', type=str, choices=[''])
     parser.add_argument('--simulation', default=3, type=str)
     parser.add_argument('--exploration', default=0.9, type=float)
@@ -35,7 +34,6 @@ def parse_args() -> Namespace:
     args = parser.parse_args()
 
     args.mode = args.mode.lower()
-
     assert args.game.lower() in GAMES
     args.game = GAMES[args.game.lower()]
 
@@ -57,7 +55,7 @@ def main():
     # Get Environment and Set Actions
     env: BaseEnv = gym.make(args.game)
     mcts = load()
-
+    # mcts = None
     if args.mode == 'train':
         if mcts is None:
             mcts = MCTS(env, simulation=args.simulation, max_depth=100, exploration_rate=args.exploration)
