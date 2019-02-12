@@ -40,7 +40,7 @@ class Node:
 class MCTS(object):
     def __init__(self, env: BaseEnv, simulation: int = 10, c: float = sqrt(2),
                  exploration_rate: float = 0.5,
-                 max_depth: int = 50, max_depth_penalty: float = -1, asynchronous: bool = False):
+                 max_depth: int = 50, max_depth_penalty: float = -1):
         self.env = env
         self.simulation = simulation
         self.max_depth = max_depth
@@ -51,29 +51,31 @@ class MCTS(object):
         self.nodes = dict()
 
         # thread
-        self._async = asynchronous
         self.pool = ThreadPool(processes=self.simulation)
         self.lock = Lock()
 
-    def get_action(self, node: Node, legal_actions, nodes: Dict[str, int] = None) -> Tuple[Node, str]:
+    def get_action(self, node: Node, legal_actions, exploration_rate: float,
+                   nodes: Dict[str, int] = None) -> Tuple[Node, str]:
         """
         :return: next node's action
         """
         # TODO
         # if len(self.history) >= self.max_depth:
         #     return None
-        mode = None
+
         if node is None or nodes is None:
             action = choice(legal_actions)
-            mode = 'random_choice_b/c_no_history'
+            mode = 'random_choice_no_history'
         elif not node.has_child():  # reached the leaf node
             action = self.rand_action(node, legal_actions)
-            mode = 'random_choice_b/c_no_child'
-        elif random() <= self.exploration_rate and len(legal_actions) >= 1 and len(node.children) < len(legal_actions):
+            mode = 'random_choice_no_child'
+        elif random() <= exploration_rate and len(legal_actions) >= 1 and len(node.children) < len(legal_actions):
             action = self.rand_action(node, legal_actions)
             mode = 'exploration'
         else:
             ucts = self.calculate_uct(self.C, node, nodes)
+            # for _a, _n in ucts:
+            #     print(f'UCT action:{_a} | {_n}')
             action, next_node = ucts[0]
             mode = 'calculate_uct'
         return action, mode
@@ -85,9 +87,9 @@ class MCTS(object):
         return action
 
     @staticmethod
-    def calculate_uct(C, node, nodes: Dict[str, int]):
+    def calculate_uct(c, node, nodes: Dict[str, int]):
         action_nodes = [(node.children[key], nodes[key]) for key in node.children]
-        ucts = map(lambda x: (x[0], (x[1].value / x[1].n_visit) + C * np.sqrt(np.log(node.n_visit) / x[1].n_visit)),
+        ucts = map(lambda x: (x[0], (x[1].value / x[1].n_visit) + c * np.sqrt(np.log(node.n_visit) / x[1].n_visit)),
                    action_nodes)
         return sorted(ucts, key=lambda c: -c[1])
 
@@ -108,63 +110,113 @@ class MCTS(object):
             history.append((player, state))
         return is_new
 
-    def simulate_actions(self, env, actions, simulation_depth: int = 100) -> dict:
-        values = {}
-        for action in actions:
-            env_copied = env.copy()
-            new_state, reward, done, info = env_copied.step(action)
+    def get_best_action(self, env, state, legal_actions, simulation_depth: int = 100, asynchronous: bool = False,
+                        debug=False):
+        # values = {}
+        # player = env.init_player
+        #
+        # for action in legal_actions:
+        #     env_copied = env.copy()
+        #     new_state, reward, done, info = env_copied.step(action)
+        #     values[action] = self.simulate(env_copied, new_state, player, 1, simulation_depth, asynchronous)
+        #
+        # values = [(k, values[k]) for k in sorted(values, key=lambda k: -values[k])]
+        # for k, v in values:
+        #     print(k, v)
+        #
+        # action, value = values[0]
+        # return action, value
 
-            values[action] = self.simulate(env_copied, new_state, simulation_depth)
+        node: Node = self.nodes.get(state)
+        if node is not None:
+            action, _mode = self.get_action(node, legal_actions, self.exploration_rate, nodes=self.nodes)
+            value = node.value / node.n_visit
+            if debug:
+                for _action in legal_actions:
+                    env_copied = env.copy()
+                    new_state, reward, done, info = env_copied.step(_action)
+                    node: Node = self.nodes.get(new_state)
+                    if node is None:
+                        continue
 
-        values = [(k, values[k]) for k in sorted(values, key=lambda k: -values[k])]
-        return values
+                    print(f'get_best_action <node> | action:{_action} | value:{node.value} | visit: {node.n_visit} | '
+                          f'score: {node.value / node.n_visit:.2}')
+        else:
+            values = {}
+            player = env.init_player
+            for action in legal_actions:
+                env_copied = env.copy()
+                new_state, reward, done, info = env_copied.step(action)
+                node: Node = self.nodes.get(new_state)
+                if node is None:
+                    continue
 
-    def simulate(self, env, state, simulation_depth: int = 4):
+                values[action] = node.value / node.n_visit
 
+                # values[action] = self.simulate(env_copied, new_state, player, simulation_depth)
+
+            values = [(k, values[k]) for k in sorted(values, key=lambda k: -values[k])]
+
+            if debug:
+                for _k, _v in values:
+                    print(_k, _v)
+
+            action, value = values[0]
+        return action, value
+
+    def simulate(self, env, state, player, simulation: int = 1, simulation_depth: int = 100,
+                 asynchronous: bool = False):
         value = 0
         results = []
 
-        if self._async:
-            for i in range(self.simulation):
+        if asynchronous:
+            for i in range(simulation):
                 env_copied = env.copy()
-                args = (env_copied, state, simulation_depth)
+                args = (env_copied, state, player, simulation_depth)
                 async_result = self.pool.apply_async(self._simulate, args)
                 results.append(async_result)
-                # value += self._simulate(env_copied, state, nodes)
 
             for async_result in results:
                 value += async_result.get()
         else:
-            for i in range(self.simulation):
+            for i in range(simulation):
                 env_copied = env.copy()
-
-                args = (env_copied, state, simulation_depth)
-                value += self._simulate(env_copied, args)
+                env_copied.player = player
+                args = (env_copied, state, player, simulation_depth)
+                value += self._simulate(*args)
 
         return value
 
-    def _simulate(self, env: BaseEnv, state, depth=4):
-        player = env.player
+    def _simulate(self, env: BaseEnv, state, player: int, depth: int = 4, tie_value: int = 0):
+        assert player == env.init_player
         node = self.nodes.get(state)
+
+        # env.render()
+        # print(f'state:{state} | env.init_player:{env.init_player} , cur_player:{env.cur_player}, player:{player}')
 
         i = 0
         while True:
-
             legal_actions = env.get_legal_actions()
 
             if legal_actions is None or not legal_actions:
-                return env.calculate_reward(player)
+                return tie_value
+                # return env.calculate_reward(player)
             assert len(legal_actions) > 0
 
-            action, _ = self.get_action(node, legal_actions)
+            action, _ = self.get_action(node, legal_actions, exploration_rate=0, nodes=self.nodes)
             if action is None:  # reached maximum depth of the tree
                 return 0
             assert action in legal_actions
 
             new_state, reward, done, info = env.step(action)
 
+            # env.render()
+            # print(env.board)
+            # print(
+            #     f'cur_player:{env.cur_player}, player:{player} | action:{action} | reward:{reward} | done:{done} | mode:{_} | node:{node}')
+
             if done:
-                return env.calculate_reward(player)
+                return reward
 
             node = self.nodes.get((state, new_state))
             state = new_state
@@ -191,9 +243,10 @@ class MCTS(object):
 
         return total_value, count
 
-    def train(self, epochs: int = 10000, simulation_depth: int = 4, seed=None):
+    def train(self, epochs: int = 10000, simulation_depth: int = 4, tie_value=None, checkpoint: str = 'checkpoint.pkl',
+              asynchronous: bool = False, seed=None):
         env = self.env.copy()
-        display_time = datetime.now()
+        _display_time = _save_time = datetime.now()
 
         _new_state_count = 0
         _backpropagation_count = 0
@@ -205,35 +258,34 @@ class MCTS(object):
         logger.info(f'epoch:{epochs} | simulation_depth:{simulation_depth} | simulation:{self.simulation} |'
                     f' C:{self.C} | seed:{seed}')
 
-        for epoch in tqdm(range(1, epochs + 1), ncols=50):
+        for epoch in tqdm(range(1, epochs + 1), ncols=70):
             # Log variables
 
             # Reset Game
             history = []
-            next_player = None
 
             if seed is not None:
                 env.seed(seed)
             state = env.reset()
-            current_player = env.player
-            self.expand(None, state, 'root', history=history, player=current_player)
+            init_player = env.init_player
+            self.expand(None, state, 'root', history=history, player=env.cur_player)
 
             while True:
                 # Get Legal Actions
                 legal_actions = env.get_legal_actions()
 
                 if legal_actions is None or not legal_actions:
-                    value = env.calculate_reward(current_player)
-                    if False and value > 0:
-                        back_value, back_count = self.backpropagate(history, current_player, value, 1)
+                    if tie_value is not None and tie_value != 0:
+                        back_value, back_count = self.backpropagate(history, init_player, tie_value, 1)
                         _backpropagation_count += back_count
-                        _total_backpropagation.setdefault(env.player, 0)
-                        _total_backpropagation[env.player] += back_value
+                        _total_backpropagation.setdefault(env.init_player, 0)
+                        _total_backpropagation[env.init_player] += back_value
                     break
                 assert len(legal_actions) > 0
 
                 # Select & Expand
-                action, _ = self.get_action(self.nodes[history[-1][1]], legal_actions, nodes=self.nodes)
+                action, _ = self.get_action(self.nodes[history[-1][1]], legal_actions,
+                                            exploration_rate=self.exploration_rate, nodes=self.nodes)
                 if action is None:  # it reached the end of the tree
                     break
                 assert action in legal_actions
@@ -241,57 +293,46 @@ class MCTS(object):
                 # Action!
                 # After step function, player is changed.
                 state, reward, done, info = env.step(action)
-                next_player = env.player
+                assert init_player == env.init_player
 
                 # Expand
                 is_new = self.expand(self.nodes[history[-1][1]], state, action, history=history,
-                                     player=next_player)
+                                     player=env.cur_player)
 
                 if is_new:
                     _new_state_count += 1
 
                 # Simulation
-                if _turn_count > 50:
-                    _time_simulation_start = datetime.now()
-                    value = self.simulate(env, state, simulation_depth=simulation_depth)
-                    _total_value += value
-                    _time_simulation += (datetime.now() - _time_simulation_start).total_seconds()
-
-                    # Backpropagation
-                    if False and value > 0:
-                        back_value, back_count = self.backpropagate(history, current_player, value, self.simulation)
-                        _backpropagation_count += back_count
-                        _total_backpropagation.setdefault(current_player, 0)
-                        _total_backpropagation[current_player] += back_value
+                # if _turn_count > 50:
+                #     _time_simulation_start = datetime.now()
+                #     value = self.simulate(env, state, player=init_player, simulation_depth=simulation_depth,
+                #                           asynchronous=asynchronous)
+                #     _total_value += value
+                #     _time_simulation += (datetime.now() - _time_simulation_start).total_seconds()
+                #
+                #     # Backpropagation
+                #     if value != 0:
+                #         back_value, back_count = self.backpropagate(history, current_player, value, self.simulation)
+                #         _backpropagation_count += back_count
+                #         _total_backpropagation.setdefault(current_player, 0)
+                #         _total_backpropagation[current_player] += back_value
 
                 # Increase turn count
                 _turn_count += 1
-                # print()
-                # print(env.board)
-                # for h in history[::-1]:
-                #     print(h, self.nodes[h[1]], self.nodes[h[1]].children)
-                # env.render()
-                # import ipdb
-                # ipdb.set_trace()
 
                 # Gave Over
-                if done:
-                    # print()
-                    # print('DONE')
 
-                    back_value, back_count = self.backpropagate(history, current_player, reward, 1)
-                    # ipdb.set_trace()
+                if done:
+                    back_value, back_count = self.backpropagate(history, init_player, reward, 1)
 
                     _backpropagation_count += back_count
-                    _total_backpropagation.setdefault(current_player, 0)
-                    _total_backpropagation[current_player] += back_value
+                    _total_backpropagation.setdefault(init_player, 0)
+                    _total_backpropagation[init_player] += back_value
                     break
 
-                # Status Change
-                current_player = next_player
-
             # Display
-            display_sec = (datetime.now() - display_time).total_seconds()
+            display_sec = (datetime.now() - _display_time).total_seconds()
+            save_sec = (datetime.now() - _save_time).total_seconds()
             if display_sec >= 1:
                 n_nodes = len(self.nodes)
                 n_history = len(history)
@@ -302,7 +343,7 @@ class MCTS(object):
                 print(f'nodes:{n_nodes} | new s:{_new_state_count} | hist:{n_history} | '
                       f'n:{_turn_count} | sim:{_total_value}v/{_backpropagation_count}c/{_time_simulation}s')
 
-                display_time = datetime.now()
+                _display_time = datetime.now()
                 _new_state_count = 0
                 _backpropagation_count = 0
                 _total_backpropagation = {}
@@ -310,11 +351,14 @@ class MCTS(object):
                 _turn_count = 0
                 _total_value = 0
 
-            if epoch % 2000 == 0:
-                save(self)
+            if save_sec >= 20:
+                save(self, checkpoint)
+                _save_time = datetime.now()
+        else:
+            save(self, checkpoint)
 
-    def play(self, mode: str, exploration_rate: float = 0.1, simulation=64, simulation_depth: int = 100,
-             seed: int = None):
+    def play(self, mode: str, exploration_rate: float = 0., simulation=512, simulation_depth: int = 100,
+             asynchronous: bool = False, seed: int = None):
         assert mode in ['cc', 'ch', 'hh', 'hc']
 
         # Set is_human fucntion
@@ -330,7 +374,7 @@ class MCTS(object):
         # Initialize parameters
         self.exploration_rate = exploration_rate
         self.simulation = simulation
-        self.pool = ThreadPool(processes=self.simulation)
+        self.pool = ThreadPool(processes=simulation)
 
         # Initialize the Game
         env = self.env.copy()
@@ -348,35 +392,27 @@ class MCTS(object):
                 break
             print()
             print('[TURN]=======================================================')
-            print(f'Current Player:{env.PLAYERS[env.player]} {env.player}')
-            print(f'node:{self.nodes.get(state)} | state:{state}')
+            print(f'Current Player:{env.PLAYERS[env.init_player]} {env.init_player}')
             print(env.board)
 
             # Get Action
             if is_human_turn:
                 env.render()
                 action = env.play_as_human()
+                if action is None:
+                    break
             else:
-                action_values = self.simulate_actions(env, legal_actions, simulation_depth=simulation_depth)
-                action, value = action_values[0]
+                action, value = self.get_best_action(env, state, legal_actions, simulation_depth=simulation_depth,
+                                                     debug=True)
 
-                board = env.board.copy()
-                board[:] = 0
-                for _action, _value in action_values:
-                    board[_action] = _value
+                print(f'Computer:{env.init_player} | Decision: {action} | value:{value}')
 
-                print('[action_values]')
-                for _action, _value in action_values:
-                    print(_action, _value)
-
-                print(f'Computer:{env.player} | Decision: {action} | value:{value}')
-
-                node: Node = self.nodes.get(state)
+                # node: Node = self.nodes.get(state)
                 # assert node is not None
                 # logger.debug(f'children:{len(node.children)} | legal_actions: {len(legal_actions)}')
-                action, _mode = self.get_action(node, legal_actions, nodes=self.nodes)
-                print('[Get Action]')
-                print(f'action:{action} | mode:{_mode}')
+                # action, _mode = self.get_action(node, legal_actions, nodes=self.nodes)
+                # print('[Get Action]')
+                # print(f'action:{action} | mode:{_mode}')
 
             # Action!
             assert action is not None
@@ -391,9 +427,12 @@ class MCTS(object):
 
             if done:
                 print()
-                print(f'Done | player:{env.player} | {info} | {reward}')
+                print(f'[done] | player:{env.init_player} | reward:{reward}')
                 break
-        sleep(3)
+
+            if mode == 'cc':
+                sleep(0.5)
+        sleep(1)
 
 
 def save(mcts: MCTS, file='checkpoint.pkl'):

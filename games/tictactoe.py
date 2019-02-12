@@ -11,7 +11,7 @@ from pygame.locals import *
 from mcts.env import BaseEnv
 
 
-class TicTacToeBase(BaseEnv, EzPickle):
+class TicTacToeBase(BaseEnv, EzPickle, ABC):
     EMPTY = 0
     WHITE = 1  # O
     BLACK = 2  # X
@@ -20,24 +20,18 @@ class TicTacToeBase(BaseEnv, EzPickle):
     def __init__(self):
         super(TicTacToeBase, self).__init__()
 
-        self.player = self.WHITE
+        self.init_player = self.cur_player = np.random.choice([self.WHITE, self.BLACK])
         self.board = np.zeros((3, 3), dtype=np.int)
         self._cache = {}
 
     def change_turn(self):
-        self.player = self.WHITE if self.player == self.BLACK else self.BLACK
+        self.cur_player = self.WHITE if self.cur_player == self.BLACK else self.BLACK
 
     def copy(self):
         copied = deepcopy(self)
-        copied.player = self.player
+        copied.cur_player = self.cur_player
         copied.board = self.board.copy()
         return copied
-
-    def calculate_reward(self, player) -> int:
-        is_win = self.is_win(player)
-        if is_win:
-            return 1
-        return 0
 
     def get_legal_actions(self) -> list:
         legal_actions = np.column_stack(np.dstack(np.where(self.board == self.EMPTY)))
@@ -46,30 +40,36 @@ class TicTacToeBase(BaseEnv, EzPickle):
         return legal_actions
 
     def to_hashed_state(self, player, state) -> str:
-        return str(self.player) + ''.join(self.board.reshape(-1).astype(np.int).astype(np.str).tolist())
+        return str(self.cur_player) + ''.join(self.board.reshape(-1).astype(np.int).astype(np.str).tolist())
 
     def step(self, action):
         y, x = action
         assert self.board[y, x] == self.EMPTY
 
-        self.board[y, x] = self.player
+        self.board[y, x] = self.cur_player
 
-        done = is_win = self.is_win(self.player)
-        hashed_state = self.to_hashed_state(self.player, self.board)
+        done = is_win = self.is_win(self.cur_player)
+        hashed_state = self.to_hashed_state(self.cur_player, self.board)
         reward = 0
 
         if not done:
             done = np.sum(self.board == self.EMPTY) == 0
-        if is_win:
-            reward = 1
+
+        if done:
+            if is_win and self.init_player == self.cur_player:
+                reward = 1
+            elif is_win:
+                reward = -1
+            else:
+                reward = 0
 
         self.change_turn()
         return hashed_state, reward, done, {}
 
     def reset(self):
         self.board = np.zeros((3, 3), dtype=np.int)
-        self.player = np.random.choice([self.WHITE, self.BLACK])
-        return self.to_hashed_state(self.player, self.board)
+        self.init_player = self.cur_player = np.random.choice([self.WHITE, self.BLACK])
+        return self.to_hashed_state(self.cur_player, self.board)
 
     def is_win(self, player) -> bool:
         for i in range(0, 3):
@@ -166,7 +166,7 @@ class TicTacToe(TicTacToeBase):
     def _render_status(self):
         winner = None
         if (winner is None):
-            message = f'Turn: {self.PLAYERS[self.player]}'
+            message = f'Turn: {self.PLAYERS[self.cur_player]}'
         else:
             message = winner + " won!"
 
@@ -206,7 +206,7 @@ class TicTacToe(TicTacToeBase):
                 pygame.draw.line(self.screen, (0, 0, 0), (center_x + 22, center_y - 22), \
                                  (center_x - 22, center_y + 22), 2)
 
-        self._draw_line(self.player)
+        self._draw_line(self.cur_player)
         self.init_screen.blit(self.screen, (0, 0))
         pygame.display.update()
 
